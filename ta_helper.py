@@ -19,7 +19,7 @@ st.set_page_config(page_title="TA Helper AI", layout="wide")
 if "list_classes" not in st.session_state:
     st.session_state.list_classes = ["402-PP-4B-S3", "440-PP-2B-S3", "348-IX-1A-S3", "341-PP-2A-S3"]
 
-# --- HÀM BACKEND 1: GOOGLE CALENDAR ---
+# --- HÀM BACKEND 1: GOOGLE CALENDAR (Giữ nguyên) ---
 def sync_to_google_calendar(events_list, class_name):
     try:
         info = json.loads(st.secrets["GOOGLE_APPLICATION_CREDENTIALS"])
@@ -39,7 +39,7 @@ def sync_to_google_calendar(events_list, class_name):
     except Exception as e:
         st.error(f"Lỗi Calendar: {str(e)}"); return False
 
-# --- HÀM BACKEND 2: GEMINI 2.5 OCR (LƯU FILE VẬT LÝ) ---
+# --- HÀM BACKEND 2: GEMINI 2.5 OCR (SỬA LỖI TRUYỀN ẢNH KHI DÙNG CLOUD) ---
 def call_gemini_25_json(uploaded_file, class_name):
     """Lưu ảnh thành file vật lý trên server để đảm bảo Replicate đọc được 100%"""
     
@@ -108,14 +108,14 @@ def class_details_dialog(class_name):
     with col_res:
         data = st.session_state.get(f"ai_result_{class_name}")
         if data:
-            t1, t2 = st.tabs(["📋 Danh sách", "📅 Lịch"])
+            t1, t2 = st.tabs(["📋 Danh sách học sinh", "📅 Lịch học tập"])
             t1.dataframe(data.get("class_list", []), use_container_width=True)
             with t2:
                 schedule = data.get("class_schedule", [])
                 st.table(schedule)
                 if st.button("🚀 Đồng bộ Google Calendar", key=f"sync_{class_name}"):
                     if sync_to_google_calendar(schedule, class_name): st.success("Đồng bộ thành công!")
-        else: st.info("Dữ liệu sẽ xuất hiện tại đây.")
+        else: st.info("Dữ liệu sau khi trích xuất sẽ hiển thị tại đây.")
 
 def create_class_widget(class_name):
     with st.container(border=True):
