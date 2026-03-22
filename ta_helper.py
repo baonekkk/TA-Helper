@@ -3,6 +3,7 @@ import replicate
 import os
 import json
 import base64
+import tempfile # Thư viện mới thêm vào để tạo file vật lý
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -38,20 +39,10 @@ def sync_to_google_calendar(events_list, class_name):
     except Exception as e:
         st.error(f"Lỗi Calendar: {str(e)}"); return False
 
-# --- HÀM BACKEND 2: GEMINI 2.5 OCR (SỬA LỖI TRUYỀN ẢNH) ---
+# --- HÀM BACKEND 2: GEMINI 2.5 OCR (LƯU FILE VẬT LÝ) ---
 def call_gemini_25_json(uploaded_file, class_name):
-    """Mã hóa ảnh sang Base64 để đảm bảo Gemini nhận đủ dữ liệu"""
+    """Lưu ảnh thành file vật lý trên server để đảm bảo Replicate đọc được 100%"""
     
-    # 1. Đảm bảo con trỏ file ở vị trí bắt đầu
-    uploaded_file.seek(0)
-    
-    # 2. Mã hóa sang Base64
-    image_read = uploaded_file.read()
-    image_base64 = base64.b64encode(image_read).decode("utf-8")
-    
-    # Tạo chuỗi data URI (ép Replicate nhận diện là ảnh)
-    image_data_uri = f"data:image/jpeg;base64,{image_base64}"
-
     prompt = f"""
     Bạn là một robot OCR chuyên nghiệp. Hãy đọc ảnh hồ sơ lớp {class_name} đính kèm và trích xuất thông tin.
     
@@ -70,21 +61,36 @@ def call_gemini_25_json(uploaded_file, class_name):
       ]
     }}
     """
+    
+    tmp_file_path = None
     try:
-        # Gửi dữ liệu dưới dạng URI để đảm bảo tính toàn vẹn
-        output = replicate.run(
-            GEMINI_MODEL,
-            input={
-                "image": image_data_uri, 
-                "prompt": prompt, 
-                "temperature": 0.0
-            }
-        )
+        # 1. Tạo một file tạm vật lý trên ổ cứng của server
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+            tmp_file.write(uploaded_file.getvalue()) # Ghi dữ liệu từ RAM xuống ổ cứng
+            tmp_file_path = tmp_file.name
+
+        # 2. Mở file vật lý đó ra và gửi cho Replicate
+        with open(tmp_file_path, "rb") as image_file:
+            output = replicate.run(
+                GEMINI_MODEL,
+                input={
+                    "image": image_file, 
+                    "prompt": prompt, 
+                    "temperature": 0.0
+                }
+            )
+            
         full_res = "".join(output).strip()
         clean_json = full_res.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_json)
+        
     except Exception as e:
-        st.error(f"Lỗi truyền tải ảnh hoặc AI: {str(e)}"); return None
+        st.error(f"Lỗi truyền tải ảnh hoặc AI: {str(e)}")
+        return None
+    finally:
+        # 3. Dọn rác: Xóa file tạm sau khi dùng xong để giải phóng bộ nhớ
+        if tmp_file_path and os.path.exists(tmp_file_path):
+            os.remove(tmp_file_path)
 
 # --- GIAO DIỆN ---
 @st.dialog("Quản lý hồ sơ lớp học", width="large")
