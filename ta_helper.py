@@ -2,6 +2,7 @@ import streamlit as st
 import replicate
 import os
 import json
+import base64
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -17,7 +18,7 @@ st.set_page_config(page_title="TA Helper AI", layout="wide")
 if "list_classes" not in st.session_state:
     st.session_state.list_classes = ["402-PP-4B-S3", "440-PP-2B-S3", "348-IX-1A-S3", "341-PP-2A-S3"]
 
-# --- HÀM BACKEND 1: GOOGLE CALENDAR (Giữ nguyên) ---
+# --- HÀM BACKEND 1: GOOGLE CALENDAR ---
 def sync_to_google_calendar(events_list, class_name):
     try:
         info = json.loads(st.secrets["GOOGLE_APPLICATION_CREDENTIALS"])
@@ -37,44 +38,55 @@ def sync_to_google_calendar(events_list, class_name):
     except Exception as e:
         st.error(f"Lỗi Calendar: {str(e)}"); return False
 
-# --- HÀM BACKEND 2: GEMINI 2.5 OCR (TỐI ƯU PROMPT) ---
+# --- HÀM BACKEND 2: GEMINI 2.5 OCR (SỬA LỖI TRUYỀN ẢNH) ---
 def call_gemini_25_json(uploaded_file, class_name):
-    """Sử dụng Gemini 2.5 Flash với Prompt khắt khe để tránh hallucination"""
+    """Mã hóa ảnh sang Base64 để đảm bảo Gemini nhận đủ dữ liệu"""
     
-    # PROMPT MỚI, KHẮT KHE HƠN CŨ 10 LẦN
+    # 1. Đảm bảo con trỏ file ở vị trí bắt đầu
+    uploaded_file.seek(0)
+    
+    # 2. Mã hóa sang Base64
+    image_read = uploaded_file.read()
+    image_base64 = base64.b64encode(image_read).decode("utf-8")
+    
+    # Tạo chuỗi data URI (ép Replicate nhận diện là ảnh)
+    image_data_uri = f"data:image/jpeg;base64,{image_base64}"
+
     prompt = f"""
-    Bạn là một robot OCR chuyên nghiệp, chỉ làm việc với sự thật trích xuất được từ hình ảnh. 
-    Nhiệm vụ của bạn là bóc tách dữ liệu từ ảnh folder lớp {class_name} và chuyển đổi sang JSON.
+    Bạn là một robot OCR chuyên nghiệp. Hãy đọc ảnh hồ sơ lớp {class_name} đính kèm và trích xuất thông tin.
+    
+    QUY TẮC:
+    1. Chỉ bóc tách thông tin có thực trong ảnh. Nếu không thấy, để null.
+    2. 'Ngày học' định dạng YYYY-MM-DD.
+    3. Trả về duy nhất mã JSON, không giải thích.
 
-    --- QUY TẮC BẮT BUỘC ---
-    1. Tuyệt đối KHÔNG ĐƯỢC BỊA ĐẶT thông tin. Chỉ bóc tách những gì bạn nhìn thấy CHẮC CHẮN.
-    2. Nếu một trường thông tin (ví dụ: DOB, Địa Chỉ) không có trong ảnh hoặc bạn không đọc được, bạn PHẢI để giá trị là null. KHÔNG ĐƯỢC đoán.
-    3. Trường 'Ngày học' PHẢI có định dạng YYYY-MM-DD. Nếu không thấy năm, giả định là năm 2026.
-    4. Chỉ trả về duy nhất mã JSON hợp lệ. Không lời chào, không markdown.
-
-    --- ĐẦU RA MONG MUỐN (JSON FORMAT) ---
+    JSON FORMAT:
     {{
       "class_list": [
-        {{ "Tên học sinh": "...", "Gender": "...", "DOB": "YYYY-MM-DD hoặc null", "Tên Phụ Huynh": "...", "SĐT": "...", "Địa Chỉ": "..." }}
+        {{ "Tên học sinh": "...", "Gender": "...", "DOB": "...", "Tên Phụ Huynh": "...", "SĐT": "...", "Địa Chỉ": "..." }}
       ],
       "class_schedule": [
-        {{ "Tên bài": "...", "Ngày học": "YYYY-MM-DD" }}
+        {{ "Tên bài": "...", "Ngày học": "..." }}
       ]
     }}
     """
     try:
-        # Replicate hỗ trợ truyền trực tiếp file object
+        # Gửi dữ liệu dưới dạng URI để đảm bảo tính toàn vẹn
         output = replicate.run(
             GEMINI_MODEL,
-            input={"image": uploaded_file, "prompt": prompt, "temperature": 0.0} # Temperature=0 để AI lỳ lợm nhất, ít sáng tạo nhất
+            input={
+                "image": image_data_uri, 
+                "prompt": prompt, 
+                "temperature": 0.0
+            }
         )
         full_res = "".join(output).strip()
         clean_json = full_res.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_json)
     except Exception as e:
-        st.error(f"Lỗi AI: {str(e)}"); return None
+        st.error(f"Lỗi truyền tải ảnh hoặc AI: {str(e)}"); return None
 
-# --- GIAO DIỆN (Giữ nguyên logic cũ) ---
+# --- GIAO DIỆN ---
 @st.dialog("Quản lý hồ sơ lớp học", width="large")
 def class_details_dialog(class_name):
     st.markdown(f"### 🏫 Hồ sơ lớp: {class_name}")
@@ -84,7 +96,7 @@ def class_details_dialog(class_name):
         if uploaded_file:
             st.image(uploaded_file, use_container_width=True)
             if st.button("🔮 Trích xuất dữ liệu (Gemini 2.5)", type="primary", key=f"run_{class_name}"):
-                with st.spinner("AI đang bóc tách..."):
+                with st.spinner("AI đang nhìn ảnh..."):
                     result = call_gemini_25_json(uploaded_file, class_name)
                     if result: st.session_state[f"ai_result_{class_name}"] = result
     with col_res:
@@ -96,8 +108,8 @@ def class_details_dialog(class_name):
                 schedule = data.get("class_schedule", [])
                 st.table(schedule)
                 if st.button("🚀 Đồng bộ Google Calendar", key=f"sync_{class_name}"):
-                    if sync_to_google_calendar(schedule, class_name): st.success("Đã đồng bộ lịch!")
-        else: st.info("Chờ trích xuất...")
+                    if sync_to_google_calendar(schedule, class_name): st.success("Đồng bộ thành công!")
+        else: st.info("Dữ liệu sẽ xuất hiện tại đây.")
 
 def create_class_widget(class_name):
     with st.container(border=True):
