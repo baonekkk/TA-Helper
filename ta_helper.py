@@ -74,7 +74,7 @@ def call_gemini_25_json(uploaded_file, class_name):
             output = replicate.run(
                 GEMINI_MODEL,
                 input={
-                    "image": image_file, 
+                    "images": [image_file],  # Thêm 's' và bọc file trong ngoặc vuông []
                     "prompt": prompt, 
                     "temperature": 0.0
                 }
