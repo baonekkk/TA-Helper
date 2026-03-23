@@ -1,13 +1,11 @@
-# Môi trường ảo (Quan trọng nhất)
-venv/
-ENV/
-env/
-
-# File bí mật (Đã làm ở bước trước)
+# Giấu các file chứa mã bí mật
+*.json
 .streamlit/secrets.toml
 
-# Các file rác của Python và hệ thống
+# Giấu các file rác của Python
 __pycache__/
 *.pyc
-.DS_Store
+
+# Giấu môi trường ảo (nếu có)
+venv/
 .env
