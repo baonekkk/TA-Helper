@@ -29,13 +29,13 @@ def _get_creds():
 def get_drive_service():
     """Khởi tạo và trả về đối tượng kết nối Google Drive API."""
     creds = _get_creds()
-    return build('drive', 'v3', credentials=creds)
+    return build('drive', 'v3', credentials=creds, cache_discovery=False)
 
 @st.cache_resource
 def get_calendar_service():
     """Khởi tạo và trả về đối tượng kết nối Google Calendar API."""
     creds = _get_creds()
-    return build('calendar', 'v3', credentials=creds)
+    return build('calendar', 'v3', credentials=creds, cache_discovery=False)
 
 def get_or_create_folder(service, folder_name, parent_id):
     """Tìm kiếm thư mục theo tên và ID cha, nếu không có thì tạo mới."""
@@ -46,7 +46,7 @@ def get_or_create_folder(service, folder_name, parent_id):
         fields='files(id, name)',
         includeItemsFromAllDrives=True,
         supportsAllDrives=True
-    ).execute()
+    ).execute(num_retries=3)
     
     items = results.get('files', [])
     
@@ -60,7 +60,7 @@ def get_or_create_folder(service, folder_name, parent_id):
             body=file_metadata, 
             fields='id',
             supportsAllDrives=True
-        ).execute()
+        ).execute(num_retries=3)
         st.cache_data.clear()
         return folder.get('id')
     else:
@@ -80,7 +80,7 @@ def initialize_class_structure(class_name):
         fields='files(id, name)',
         includeItemsFromAllDrives=True,
         supportsAllDrives=True
-    ).execute()
+    ).execute(num_retries=3)
     existing_subs = {f['name']: f['id'] for f in res_sub.get('files', [])}
     
     subfolders = ["Reminders", "Danh Sách Lớp", "Lịch", "Khác"]
@@ -99,7 +99,7 @@ def initialize_class_structure(class_name):
                 body=file_metadata, 
                 fields='id', 
                 supportsAllDrives=True
-            ).execute()
+            ).execute(num_retries=3)
             sub_id = sub_folder.get('id')
             st.cache_data.clear()
         
@@ -122,7 +122,7 @@ def upload_file_to_drive(file_stream, file_name, mime_type, parent_folder_id):
         media_body=media, 
         fields='id',
         supportsAllDrives=True
-    ).execute()
+    ).execute(num_retries=3)
     st.cache_data.clear()
     return uploaded_file.get('id')
 
@@ -137,7 +137,7 @@ def list_files_in_folder(parent_folder_id):
         fields='files(id, name, mimeType)',
         includeItemsFromAllDrives=True,
         supportsAllDrives=True
-    ).execute()
+    ).execute(num_retries=3)
     return results.get('files', [])
 
 def delete_file_from_drive(file_id):
@@ -146,7 +146,7 @@ def delete_file_from_drive(file_id):
     service.files().delete(
         fileId=file_id, 
         supportsAllDrives=True
-    ).execute()
+    ).execute(num_retries=3)
     st.cache_data.clear()
 
 def set_class_status_file(class_folder_id, status):
@@ -159,10 +159,10 @@ def set_class_status_file(class_folder_id, status):
         fields='files(id)', 
         includeItemsFromAllDrives=True,
         supportsAllDrives=True
-    ).execute()
+    ).execute(num_retries=3)
     
     for f in results.get('files', []):
-        service.files().delete(fileId=f['id'], supportsAllDrives=True).execute()
+        service.files().delete(fileId=f['id'], supportsAllDrives=True).execute(num_retries=3)
         
     if status in ['archived', 'deleted']:
         file_metadata = {
@@ -175,7 +175,7 @@ def set_class_status_file(class_folder_id, status):
             media_body=media,
             fields='id', 
             supportsAllDrives=True
-        ).execute()
+        ).execute(num_retries=3)
     st.cache_data.clear()
 
 @st.cache_data
@@ -191,7 +191,7 @@ def get_all_classes_from_drive():
         fields='files(id, name)',
         includeItemsFromAllDrives=True,
         supportsAllDrives=True
-    ).execute()
+    ).execute(num_retries=3)
     folders = res_folders.get('files', [])
     
     query_status = "name contains 'STATUS_' and trashed=false"
@@ -203,7 +203,7 @@ def get_all_classes_from_drive():
             includeItemsFromAllDrives=True,
             supportsAllDrives=True,
             corpora='allDrives'
-        ).execute()
+        ).execute(num_retries=3)
     except Exception:
         res_status = service.files().list(
             q=query_status, 
@@ -211,7 +211,7 @@ def get_all_classes_from_drive():
             fields='files(name, parents)',
             includeItemsFromAllDrives=True,
             supportsAllDrives=True
-        ).execute()
+        ).execute(num_retries=3)
         
     status_files = res_status.get('files', [])
     status_map = {}
@@ -244,60 +244,57 @@ def download_file_from_drive(file_id):
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while done is False:
-        status, done = downloader.next_chunk()
+        status, done = downloader.next_chunk(num_retries=3)
     return fh.getvalue()
 
-def push_to_google_calendar(events, target_calendar_id='primary'):
-    """Đẩy danh sách sự kiện lên Google Calendar với Checklist và Thông báo chuẩn."""
+def push_to_google_calendar(events, target_calendar_id='baonguyentu02@gmail.com'):
+    """Đẩy sự kiện với reminders.useDefault=False theo đúng tài liệu Google."""
     service = get_calendar_service()
     
     for ev in events:
-        start_dt = ev['start']
-        end_dt = ev['end']
+        start_iso = ev['start']
+        end_iso = ev['end']
         props = ev.get('extendedProps', {})
         is_exam = props.get('is_exam', False)
         
-        # Chuẩn hóa múi giờ
-        if '+' not in start_dt: start_dt = f"{start_dt}+07:00"
-        if '+' not in end_dt: end_dt = f"{end_dt}+07:00"
-        if start_dt == end_dt:
-            try:
-                base_dt = datetime.fromisoformat(ev['start'])
-                end_dt = (base_dt + timedelta(hours=1, minutes=30)).isoformat() + "+07:00"
-            except: pass
+        # Làm sạch chuỗi thời gian ISO
+        if '+' not in start_iso: start_iso = f"{start_iso}+07:00"
+        if '+' not in end_iso: end_iso = f"{end_iso}+07:00"
 
-        # 1. Xây dựng Description (Checklist)
-        normal_checklist = "CHECKLIST NHIỆM VỤ:\n1. Gửi reminder cho lớp"
-        exam_checklist = "CHECKLIST NGÀY THI:\n1. Gọi điện hỏi Quản lý lớp Kiểm tra đề thi\n2. Chuẩn bị dụng cụ, phòng ốc"
+        # 1. Xây dựng Checklist nhiệm vụ
+        normal_task = "CHECKLIST NHIỆM VỤ:\n1. Gửi reminder cho lớp"
+        exam_task = "CHECKLIST NGÀY THI:\n1. Gọi điện hỏi Quản lý lớp Kiểm tra đề thi\n2. Chuẩn bị dụng cụ, phòng ốc"
         
-        description = normal_checklist
+        description = normal_task
         if is_exam:
-            description = f"{exam_checklist}\n\n{normal_checklist}"
+            description = f"{exam_task}\n\n{normal_task}"
         
-        # Ghi đè nội dung từ JSON nếu có
         content = props.get('content', '')
         if content:
             description = f"NỘI DUNG HỌC:\n{content}\n\n{description}"
 
-        # 2. Xây dựng Reminders (Thông báo)
-        # Mặc định: 60p (1h) và 30p
-        reminders_overrides = [
-            {'method': 'popup', 'minutes': 60},
-            {'method': 'popup', 'minutes': 30}
-        ]
-        # Nếu là ngày thi: thêm mốc 1 ngày (1440 phút)
+        # 2. Thiết lập Reminders theo đúng hướng dẫn Google bạn đưa
+        reminders_overrides = []
         if is_exam:
-            reminders_overrides.append({'method': 'popup', 'minutes': 1440})
+            reminders_overrides.append({'method': 'popup', 'minutes': 1440}) # 1 ngày
+        
+        reminders_overrides.extend([
+            {'method': 'popup', 'minutes': 60}, # 1 tiếng
+            {'method': 'popup', 'minutes': 30}  # 30 phút
+        ])
 
         event_body = {
             'summary': ev['title'],
             'description': description,
-            'start': {'dateTime': start_dt, 'timeZone': 'Asia/Ho_Chi_Minh'},
-            'end': {'dateTime': end_dt, 'timeZone': 'Asia/Ho_Chi_Minh'},
+            'start': {'dateTime': start_iso, 'timeZone': 'Asia/Ho_Chi_Minh'},
+            'end': {'dateTime': end_iso, 'timeZone': 'Asia/Ho_Chi_Minh'},
             'reminders': {
-                'useDefault': False,
-                'overrides': reminders_overrides
+                'useDefault': False, 
+                'overrides': reminders_overrides 
             },
         }
         
-        service.events().insert(calendarId=target_calendar_id, body=event_body).execute()
+        try:
+            service.events().insert(calendarId=target_calendar_id, body=event_body).execute(num_retries=3)
+        except Exception as e:
+            st.error(f"Lỗi khi đẩy sự kiện {ev['title']}: {e}")
